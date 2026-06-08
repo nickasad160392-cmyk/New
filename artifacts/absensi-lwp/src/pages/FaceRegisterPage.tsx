@@ -43,13 +43,23 @@ export default function FaceRegisterPage() {
   const scanAnimRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const faceDetectorRef = useRef<any>(null);
   const faceCheckRef = useRef<number | null>(null);
+  // KEY FIX: state-based stream so useEffect can properly assign to video DOM ref
+  const [stream, setStream] = useState<MediaStream | null>(null);
+
+  // Assign stream to video ref after render (video DOM must exist first)
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    if (stream) { video.srcObject = stream; video.play().catch(() => {}); }
+    else video.srcObject = null;
+  }, [stream]);
 
   const stopCamera = useCallback(() => {
     if (countdownRef.current) clearTimeout(countdownRef.current);
     if (scanAnimRef.current) clearInterval(scanAnimRef.current);
     if (faceCheckRef.current) cancelAnimationFrame(faceCheckRef.current);
     if (streamRef.current) { streamRef.current.getTracks().forEach((t) => t.stop()); streamRef.current = null; }
-    if (videoRef.current) videoRef.current.srcObject = null;
+    setStream(null);
   }, []);
 
   useEffect(() => () => stopCamera(), [stopCamera]);
@@ -112,33 +122,27 @@ export default function FaceRegisterPage() {
   const openCamera = useCallback(async () => {
     setErrorMsg("");
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
+      const s = await navigator.mediaDevices.getUserMedia({
         video: { facingMode: "user", width: { ideal: 640 }, height: { ideal: 640 } },
         audio: false,
       });
-      streamRef.current = stream;
+      streamRef.current = s;
+      setStream(s); // triggers useEffect → video.srcObject = s (after render)
       setPhase("countdown");
       setCountdown(3);
+      // Start scan line animation
+      let pos = 0; let dir = 1;
+      scanAnimRef.current = setInterval(() => {
+        pos += dir * 2;
+        if (pos >= 100) dir = -1;
+        if (pos <= 0) dir = 1;
+        setScanLine(pos);
+      }, 20);
+      // After brief show, start detection
       setTimeout(() => {
-        if (videoRef.current && streamRef.current) {
-          videoRef.current.srcObject = streamRef.current;
-          videoRef.current.play().catch(() => {});
-        }
-        // Start scan line animation
-        let pos = 0;
-        let dir = 1;
-        scanAnimRef.current = setInterval(() => {
-          pos += dir * 2;
-          if (pos >= 100) dir = -1;
-          if (pos <= 0) dir = 1;
-          setScanLine(pos);
-        }, 20);
-        // After brief show, start detection
-        setTimeout(() => {
-          setPhase("scanning");
-          startFaceDetection();
-        }, 800);
-      }, 100);
+        setPhase("scanning");
+        startFaceDetection();
+      }, 900);
     } catch (err: any) {
       setErrorMsg(
         err?.name === "NotAllowedError"
@@ -385,9 +389,9 @@ export default function FaceRegisterPage() {
               Wajah Anda sudah terdaftar. Kini Anda bisa absen dengan scan wajah otomatis.
             </p>
             <div className="w-full space-y-3">
-              <button onClick={() => navigate("/absen")}
+              <button onClick={() => navigate("/dashboard")}
                 className="w-full h-14 rounded-2xl bg-[#FACC15] text-[#4A4435] font-bold text-base">
-                Coba Absen Sekarang
+                Kembali ke Beranda
               </button>
               <button onClick={() => { setPreviewUrl(null); setCapturedBase64(null); setPhase("home"); }}
                 className="w-full h-11 rounded-2xl bg-white border border-gray-200 text-[#8C8573] font-semibold text-sm flex items-center justify-center gap-2">

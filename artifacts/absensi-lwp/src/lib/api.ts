@@ -68,6 +68,8 @@ export const api = {
       apiFetch<{ user: UserProfile; token: string }>("/api/auth/register", { method: "POST", body: JSON.stringify({ name, email, password, phone }) }),
     me: () => apiFetch<UserProfile>("/api/auth/me"),
     logout: () => apiFetch<{ ok: boolean }>("/api/auth/logout", { method: "POST" }),
+    updateName: (name: string) =>
+      apiFetch<UserProfile>("/api/auth/update-name", { method: "PATCH", body: JSON.stringify({ name }) }),
     registerFacePhoto: (photoBase64: string) =>
       apiFetch<{ ok: boolean; user: UserProfile }>("/api/auth/register-face-photo", { method: "POST", body: JSON.stringify({ photoBase64 }) }),
     deleteFacePhoto: () =>
@@ -119,30 +121,29 @@ export const api = {
       if (periodType) params.set("periodType", periodType);
       return apiFetch<Goal[]>(`/api/goals${params.toString() ? `?${params}` : ""}`);
     },
-    create: (body: { title: string; period: string; periodType: string; description?: string; targetValue?: number }) =>
+    create: (body: { title: string; description?: string; period: string; periodType: string; targetValue?: number }) =>
       apiFetch<Goal>("/api/goals", { method: "POST", body: JSON.stringify(body) }),
-    update: (id: number, body: { title?: string; description?: string; progressValue?: number; status?: string; targetValue?: number }) =>
+    update: (id: number, body: { progressValue?: number; status?: string }) =>
       apiFetch<Goal>(`/api/goals/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
     remove: (id: number) => apiFetch<{ ok: boolean }>(`/api/goals/${id}`, { method: "DELETE" }),
   },
   admin: {
-    attendanceToday: () => apiFetch<{ date: string; records: AdminAttendanceRecord[] }>("/api/admin/attendance/today"),
-    attendance: (monthStart: string) => apiFetch<AdminAttendanceRecord[]>(`/api/admin/attendance?cycleStart=${monthStart}`),
-    leave: (status?: string) => apiFetch<LeaveRequest[]>(`/api/admin/leave${status ? `?status=${status}` : ""}`),
-    approveLeave: (id: number, adminNote?: string) =>
-      apiFetch<LeaveRequest>(`/api/admin/leave/${id}/approve`, { method: "POST", body: JSON.stringify({ adminNote }) }),
-    rejectLeave: (id: number, adminNote?: string) =>
-      apiFetch<LeaveRequest>(`/api/admin/leave/${id}/reject`, { method: "POST", body: JSON.stringify({ adminNote }) }),
     users: () => apiFetch<UserProfile[]>("/api/admin/users"),
-    updateUser: (id: number, body: Partial<{ name: string; jabatan: string; role: string; isActive: boolean }>) =>
+    updateUser: (id: number, body: { jabatan?: string; role?: string; isActive?: boolean; name?: string }) =>
       apiFetch<UserProfile>(`/api/admin/users/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
     resetPassword: (id: number, newPassword: string) =>
       apiFetch<{ ok: boolean }>(`/api/admin/users/${id}/reset-password`, { method: "POST", body: JSON.stringify({ newPassword }) }),
-    resetAttendance: () =>
-      apiFetch<{ ok: boolean; message: string }>("/api/admin/reset-attendance", { method: "DELETE" }),
-    resetAllData: () =>
-      apiFetch<{ ok: boolean; message: string }>("/api/admin/reset-all-data", { method: "DELETE" }),
-    employeeTasks: (date?: string) =>
-      apiFetch<Array<DailyTask & { userName: string; userJabatan?: string | null }>>(`/api/admin/employee-tasks${date ? `?date=${date}` : ""}`),
+    attendanceToday: () => apiFetch<{ records: AdminAttendanceRecord[] }>("/api/admin/attendance/today"),
+    attendance: (cycleStart: string) => apiFetch<AdminAttendanceRecord[]>(`/api/admin/attendance?cycleStart=${cycleStart}`),
+    employeeTasks: (date?: string) => apiFetch<DailyTask[]>(`/api/admin/tasks${date ? `?date=${date}` : ""}`),
+    leave: (status?: string) => apiFetch<LeaveRequest[]>(`/api/admin/leave${status ? `?status=${status}` : ""}`),
+    approveLeave: (id: number) =>
+      apiFetch<LeaveRequest>(`/api/admin/leave/${id}`, { method: "PATCH", body: JSON.stringify({ status: "approved" }) }),
+    rejectLeave: (id: number, adminNote?: string) =>
+      apiFetch<LeaveRequest>(`/api/admin/leave/${id}`, { method: "PATCH", body: JSON.stringify({ status: "rejected", adminNote }) }),
+    updateLeave: (id: number, body: { status: string; adminNote?: string }) =>
+      apiFetch<LeaveRequest>(`/api/admin/leave/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
+    resetAttendance: () => apiFetch<{ message: string }>("/api/admin/reset/attendance", { method: "POST" }),
+    resetAllData: () => apiFetch<{ message: string }>("/api/admin/reset/all", { method: "POST" }),
   },
 };

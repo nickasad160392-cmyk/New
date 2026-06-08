@@ -3,7 +3,7 @@ import { useLocation, Link } from "wouter";
 import { useAuth } from "@/lib/auth-context";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
-import { Users, FileText, BarChart2, UserCheck, Clock, AlertTriangle, ChevronRight, Map, BookOpen, Trash2, ShieldAlert } from "lucide-react";
+import { Users, FileText, BarChart2, UserCheck, Clock, AlertTriangle, ChevronRight, BookOpen, Trash2, ShieldAlert } from "lucide-react";
 
 const STATUS_MAP: Record<string, { label: string; dot: string }> = {
   hadir:     { label: "Hadir",     dot: "bg-green-500"  },
@@ -52,11 +52,10 @@ export default function AdminPage() {
   ];
 
   const menuItems = [
-    { name: "Kelola Karyawan",    description: "Ubah nama, jabatan, status & role",   href: "/admin/karyawan",  icon: Users    },
+    { name: "Kelola Karyawan",    description: "Ubah nama, jabatan, status & role",    href: "/admin/karyawan",  icon: Users    },
     { name: "Direktori Karyawan", description: "Info + agenda harian seluruh karyawan", href: "/admin/direktori", icon: BookOpen },
-    { name: "Persetujuan Izin",   description: `${pending} pengajuan menunggu`,         href: "/admin/izin",      icon: FileText },
-    { name: "Rekap Absensi",      description: "Rekap kehadiran + unduh PDF per siklus",href: "/admin/rekap",     icon: BarChart2},
-    { name: "Peta Karyawan",      description: "Lihat posisi GPS karyawan hari ini",     href: "/admin/map",       icon: Map      },
+    { name: "Persetujuan Izin",   description: `${pending} pengajuan menunggu`,          href: "/admin/izin",      icon: FileText },
+    { name: "Rekap Absensi",      description: "Rekap kehadiran + unduh PDF per siklus", href: "/admin/rekap",     icon: BarChart2},
   ];
 
   const handleReset = async (type: "attendance" | "all") => {

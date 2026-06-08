@@ -65,7 +65,6 @@ router.post("/auth/login", async (req, res) => {
     const valid = await bcrypt.compare(password, user.passwordHash);
     if (!valid) { res.status(401).json({ error: "Email/ID atau kata sandi salah" }); return; }
 
-    // Auto-upgrade HR emails to hr role if still set as employee
     let finalUser = user;
     if (HR_EMAILS.includes(user.email.toLowerCase()) && user.role === "employee") {
       const [updated] = await db.update(users).set({ role: "hr" }).where(eq(users.id, user.id)).returning();
@@ -121,6 +120,23 @@ router.post("/auth/logout", (_req, res) => {
   res.json({ ok: true });
 });
 
+// Update name (self-service)
+router.patch("/auth/update-name", requireAuth, async (req: AuthRequest, res) => {
+  try {
+    const { name } = req.body;
+    if (!name || typeof name !== "string" || name.trim().length < 2) {
+      res.status(400).json({ error: "Nama minimal 2 karakter" }); return;
+    }
+    const trimmed = name.trim();
+    await db.update(users).set({ name: trimmed }).where(eq(users.id, req.userId!));
+    const [user] = await db.select().from(users).where(eq(users.id, req.userId!)).limit(1);
+    res.json(userToProfile(user!));
+  } catch (err) {
+    req.log.error({ err }, "update-name error");
+    res.status(500).json({ error: "Terjadi kesalahan server" });
+  }
+});
+
 // Register face photo for attendance scanning (SEPARATE from profile photo)
 router.post("/auth/register-face-photo", requireAuth, async (req: AuthRequest, res) => {
   try {
@@ -140,7 +156,7 @@ router.post("/auth/register-face-photo", requireAuth, async (req: AuthRequest, r
   }
 });
 
-// Delete face photo (unregister face for attendance)
+// Delete face photo
 router.delete("/auth/face-photo", requireAuth, async (req: AuthRequest, res) => {
   try {
     await db
@@ -154,7 +170,7 @@ router.delete("/auth/face-photo", requireAuth, async (req: AuthRequest, res) => 
   }
 });
 
-// Legacy: register-selfie now saves as face photo (backward compat)
+// Legacy: register-selfie
 router.post("/auth/register-selfie", requireAuth, async (req: AuthRequest, res) => {
   try {
     const { photoBase64 } = req.body;
@@ -172,7 +188,7 @@ router.post("/auth/register-selfie", requireAuth, async (req: AuthRequest, res) 
   }
 });
 
-// Upload / replace profile photo (display photo, separate from face photo)
+// Upload / replace profile photo
 router.post("/auth/upload-photo", requireAuth, async (req: AuthRequest, res) => {
   try {
     const { photoBase64 } = req.body;
@@ -191,7 +207,7 @@ router.post("/auth/upload-photo", requireAuth, async (req: AuthRequest, res) => 
   }
 });
 
-// Delete profile photo (display photo)
+// Delete profile photo
 router.delete("/auth/photo", requireAuth, async (req: AuthRequest, res) => {
   try {
     await db
