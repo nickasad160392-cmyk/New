@@ -11,6 +11,7 @@ export const users = pgTable("users", {
   phone: text("phone"),
   isActive: boolean("is_active").notNull().default(true),
   faceDescriptor: text("face_descriptor"),
+  facePhoto: text("face_photo"),
   profilePhoto: text("profile_photo"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
 });

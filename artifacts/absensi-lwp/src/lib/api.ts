@@ -22,6 +22,7 @@ export type UserProfile = {
   jabatan?: string | null; position?: string | null;
   employeeId?: string | null; phone?: string | null;
   isActive: boolean; hasFaceDescriptor?: boolean;
+  facePhoto?: string | null;
   profilePhoto?: string | null;
 };
 export type AttendanceRecord = {
@@ -67,13 +68,17 @@ export const api = {
       apiFetch<{ user: UserProfile; token: string }>("/api/auth/register", { method: "POST", body: JSON.stringify({ name, email, password, phone }) }),
     me: () => apiFetch<UserProfile>("/api/auth/me"),
     logout: () => apiFetch<{ ok: boolean }>("/api/auth/logout", { method: "POST" }),
+    registerFacePhoto: (photoBase64: string) =>
+      apiFetch<{ ok: boolean; user: UserProfile }>("/api/auth/register-face-photo", { method: "POST", body: JSON.stringify({ photoBase64 }) }),
+    deleteFacePhoto: () =>
+      apiFetch<{ ok: boolean }>("/api/auth/face-photo", { method: "DELETE" }),
     registerSelfie: (photoBase64: string) =>
       apiFetch<{ ok: boolean }>("/api/auth/register-selfie", { method: "POST", body: JSON.stringify({ photoBase64 }) }),
     uploadPhoto: (photoBase64: string) =>
       apiFetch<UserProfile>("/api/auth/upload-photo", { method: "POST", body: JSON.stringify({ photoBase64 }) }),
     deletePhoto: () =>
       apiFetch<{ ok: boolean }>("/api/auth/photo", { method: "DELETE" }),
-    faceDescriptor: () => apiFetch<{ descriptor: number[] | null; profilePhoto: string | null }>("/api/auth/face-descriptor"),
+    faceDescriptor: () => apiFetch<{ descriptor: number[] | null; facePhoto: string | null; profilePhoto: string | null }>("/api/auth/face-descriptor"),
   },
   attendance: {
     checkIn: (body: { selfieBase64?: string; latitude?: number; longitude?: number; accuracy?: number }) =>

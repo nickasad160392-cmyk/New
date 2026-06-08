@@ -40,7 +40,7 @@ async function getAddressFromCoords(lat: number, lng: number): Promise<string> {
   }
 }
 
-type CameraPhase = "idle" | "starting" | "live" | "preview" | "submitting" | "done";
+type CameraPhase = "idle" | "starting" | "scanning" | "captured" | "submitting" | "done";
 type Mode = "check-in" | "check-out" | "overtime-option" | "overtime-in-progress" | "done-all";
 
 function getMode(today: import("@/lib/api").AttendanceRecord | null | undefined): Mode {
@@ -63,17 +63,17 @@ const MODE_CONFIG: Record<"check-in" | "check-out" | "overtime-option", {
   iconBg: string; iconColor: string; btnBg: string; btnText: string; borderColor: string;
 }> = {
   "check-in": {
-    label: "Absen Datang", desc: "Ambil foto selfie untuk clock-in pagi",
+    label: "Absen Datang", desc: "Scan wajah untuk clock-in pagi",
     icon: Sunrise, iconBg: "bg-[#FACC15]/20", iconColor: "text-[#FACC15]",
     btnBg: "bg-[#FACC15]", btnText: "text-[#4A4435]", borderColor: "border-[#FACC15]",
   },
   "check-out": {
-    label: "Absen Pulang", desc: "Ambil foto selfie untuk clock-out",
+    label: "Absen Pulang", desc: "Scan wajah untuk clock-out",
     icon: Sunset, iconBg: "bg-blue-50", iconColor: "text-blue-500",
     btnBg: "bg-blue-500", btnText: "text-white", borderColor: "border-blue-400",
   },
   "overtime-option": {
-    label: "Lembur Tambahan", desc: "Ambil foto selfie untuk mulai lembur",
+    label: "Lembur Tambahan", desc: "Scan wajah untuk mulai lembur",
     icon: Timer, iconBg: "bg-orange-50", iconColor: "text-orange-500",
     btnBg: "bg-orange-500", btnText: "text-white", borderColor: "border-orange-400",
   },
@@ -85,6 +85,9 @@ export default function AbsenPage() {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  const scanAnimRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const countdownRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const faceCheckRef = useRef<number | null>(null);
 
   const [cameraPhase, setCameraPhase] = useState<CameraPhase>("idle");
   const [errorMsg, setErrorMsg] = useState("");
@@ -93,6 +96,9 @@ export default function AbsenPage() {
   const [distanceMeters, setDistanceMeters] = useState<number | null>(null);
   const [capturedDataUrl, setCapturedDataUrl] = useState<string | null>(null);
   const [capturedBase64, setCapturedBase64] = useState<string | null>(null);
+  const [scanLine, setScanLine] = useState(0);
+  const [countdown, setCountdown] = useState(3);
+  const [faceDetected, setFaceDetected] = useState(false);
 
   const { data: today, isLoading: loadingToday } = useQuery({
     queryKey: ["attendance", "today"],
@@ -102,32 +108,107 @@ export default function AbsenPage() {
 
   const hasNoFace = !user?.hasFaceDescriptor;
   const mode: Mode = getMode(today);
+  const facePhotoSrc = user?.facePhoto ? `data:image/jpeg;base64,${user.facePhoto}` : null;
+  const profilePhotoSrc = user?.profilePhoto ? `data:image/jpeg;base64,${user.profilePhoto}` : null;
 
   const stopCamera = useCallback(() => {
+    if (countdownRef.current) clearTimeout(countdownRef.current);
+    if (scanAnimRef.current) clearInterval(scanAnimRef.current);
+    if (faceCheckRef.current) cancelAnimationFrame(faceCheckRef.current);
     if (streamRef.current) { streamRef.current.getTracks().forEach((t) => t.stop()); streamRef.current = null; }
     if (videoRef.current) videoRef.current.srcObject = null;
   }, []);
 
   useEffect(() => () => stopCamera(), [stopCamera]);
 
+  const capturePhoto = useCallback(async () => {
+    if (scanAnimRef.current) clearInterval(scanAnimRef.current);
+    if (faceCheckRef.current) cancelAnimationFrame(faceCheckRef.current);
+    if (countdownRef.current) clearTimeout(countdownRef.current);
+    const video = videoRef.current;
+    const canvas = canvasRef.current;
+    if (!video || !canvas) return;
+    canvas.width = video.videoWidth || 640;
+    canvas.height = video.videoHeight || 640;
+    const ctx = canvas.getContext("2d")!;
+    ctx.save();
+    ctx.scale(-1, 1);
+    ctx.drawImage(video, -canvas.width, 0);
+    ctx.restore();
+    const dataUrl = canvas.toDataURL("image/jpeg", 0.75);
+    const base64 = dataUrl.split(",")[1]!;
+    setCapturedDataUrl(dataUrl);
+    setCapturedBase64(base64);
+    stopCamera();
+    setCameraPhase("captured");
+  }, [stopCamera]);
+
+  const startDetection = useCallback(() => {
+    if ("FaceDetector" in window) {
+      try {
+        const detector = new (window as any).FaceDetector({ fastMode: true, maxDetectedFaces: 1 });
+        const detect = async () => {
+          if (!videoRef.current) return;
+          try {
+            const faces = await detector.detect(videoRef.current);
+            if (faces.length > 0) {
+              setFaceDetected(true);
+              setTimeout(() => capturePhoto(), 300);
+              return;
+            }
+          } catch {}
+          faceCheckRef.current = requestAnimationFrame(detect);
+        };
+        faceCheckRef.current = requestAnimationFrame(detect);
+        return;
+      } catch {}
+    }
+    // Fallback: countdown 3→0
+    let count = 3;
+    setCountdown(count);
+    const tick = () => {
+      count--;
+      setCountdown(count);
+      if (count <= 0) {
+        capturePhoto();
+      } else {
+        countdownRef.current = setTimeout(tick, 1000);
+      }
+    };
+    countdownRef.current = setTimeout(tick, 1000);
+  }, [capturePhoto]);
+
   const openCamera = useCallback(async () => {
     setCameraPhase("starting");
     setErrorMsg("");
     setCapturedDataUrl(null);
     setCapturedBase64(null);
+    setFaceDetected(false);
+    setCountdown(3);
 
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         video: { facingMode: "user", width: { ideal: 720 }, height: { ideal: 720 } }, audio: false,
       });
       streamRef.current = stream;
-      setCameraPhase("live");
+
       setTimeout(() => {
         if (videoRef.current && streamRef.current) {
           videoRef.current.srcObject = streamRef.current;
           videoRef.current.play().catch(() => {});
         }
-      }, 80);
+        // Scan line animation
+        let pos = 0; let dir = 1;
+        scanAnimRef.current = setInterval(() => {
+          pos += dir * 2;
+          if (pos >= 100) dir = -1;
+          if (pos <= 0) dir = 1;
+          setScanLine(pos);
+        }, 20);
+        setCameraPhase("scanning");
+        // Start face detection after brief delay
+        setTimeout(() => startDetection(), 600);
+      }, 100);
     } catch (err: any) {
       if (err.name === "NotAllowedError") setErrorMsg("Izin kamera ditolak. Buka Pengaturan Browser > Izin > Kamera.");
       else if (err.name === "NotFoundError") setErrorMsg("Kamera tidak ditemukan.");
@@ -150,33 +231,7 @@ export default function AbsenPage() {
         { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 },
       );
     }
-  }, [gps]);
-
-  const capturePhoto = useCallback(() => {
-    const video = videoRef.current;
-    const canvas = canvasRef.current;
-    if (!video || !canvas) return;
-    canvas.width = video.videoWidth || 640;
-    canvas.height = video.videoHeight || 640;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-    ctx.save();
-    ctx.scale(-1, 1);
-    ctx.drawImage(video, -canvas.width, 0);
-    ctx.restore();
-    const dataUrl = canvas.toDataURL("image/jpeg", 0.7);
-    const base64 = dataUrl.split(",")[1]!;
-    setCapturedDataUrl(dataUrl);
-    setCapturedBase64(base64);
-    stopCamera();
-    setCameraPhase("preview");
-  }, [stopCamera]);
-
-  const retakePhoto = useCallback(() => {
-    setCapturedDataUrl(null);
-    setCapturedBase64(null);
-    openCamera();
-  }, [openCamera]);
+  }, [gps, startDetection]);
 
   const submitPhoto = useCallback(async () => {
     if (!capturedBase64 && mode !== "overtime-in-progress") return;
@@ -204,6 +259,14 @@ export default function AbsenPage() {
     }
   }, [capturedBase64, mode, gps, queryClient]);
 
+  // Auto-submit after capture (face scan is automatic)
+  useEffect(() => {
+    if (cameraPhase === "captured" && capturedBase64 && mode !== "overtime-in-progress" && mode !== "overtime-option") {
+      const t = setTimeout(() => submitPhoto(), 800);
+      return () => clearTimeout(t);
+    }
+  }, [cameraPhase, capturedBase64, mode, submitPhoto]);
+
   const handleOvertimeCheckOut = useCallback(async () => {
     setCameraPhase("submitting");
     try {
@@ -224,13 +287,13 @@ export default function AbsenPage() {
     setErrorMsg("");
     setCapturedDataUrl(null);
     setCapturedBase64(null);
+    setFaceDetected(false);
   }, [stopCamera]);
 
   if (loadingToday) {
     return <div className="flex items-center justify-center min-h-full"><Loader2 className="w-8 h-8 animate-spin text-[#FACC15]" /></div>;
   }
 
-  const showCameraUI = cameraPhase === "starting" || cameraPhase === "live";
   const modeLabel =
     mode === "check-in" ? "Absen Datang"
     : mode === "check-out" ? "Absen Pulang"
@@ -238,7 +301,6 @@ export default function AbsenPage() {
     : mode === "overtime-in-progress" ? "Selesai Lembur"
     : "Selesai";
   const modeCfg = mode in MODE_CONFIG ? MODE_CONFIG[mode as keyof typeof MODE_CONFIG] : null;
-  const profilePhotoSrc = user?.profilePhoto ? `data:image/jpeg;base64,${user.profilePhoto}` : null;
 
   return (
     <div className="flex flex-col min-h-full">
@@ -248,15 +310,19 @@ export default function AbsenPage() {
           <Link href="/dashboard" className="w-8 h-8 rounded-full bg-[#4A4435]/10 flex items-center justify-center">
             <ArrowLeft className="w-4 h-4 text-[#4A4435]" />
           </Link>
-          <div>
+          <div className="flex-1">
             <h1 className="text-lg font-extrabold text-[#4A4435]">{modeLabel}</h1>
-            <p className="text-xs text-[#4A4435]/60">Ambil foto selfie untuk absen</p>
+            <p className="text-xs text-[#4A4435]/60">Scan wajah otomatis</p>
           </div>
-          {profilePhotoSrc && (
-            <div className="ml-auto w-9 h-9 rounded-full overflow-hidden border-2 border-[#4A4435]/20">
+          {profilePhotoSrc ? (
+            <div className="w-9 h-9 rounded-full overflow-hidden border-2 border-[#4A4435]/20">
               <img src={profilePhotoSrc} alt="profil" className="w-full h-full object-cover" />
             </div>
-          )}
+          ) : facePhotoSrc ? (
+            <div className="w-9 h-9 rounded-full overflow-hidden border-2 border-[#4A4435]/20">
+              <img src={facePhotoSrc} alt="profil" className="w-full h-full object-cover" />
+            </div>
+          ) : null}
         </div>
 
         {today?.checkInTime && (
@@ -311,7 +377,6 @@ export default function AbsenPage() {
         )}
       </div>
 
-      {/* Hidden canvas for capture */}
       <canvas ref={canvasRef} className="hidden" />
 
       <div className="flex-1 px-5 pt-6 flex flex-col items-center pb-24">
@@ -322,16 +387,16 @@ export default function AbsenPage() {
             <div className="w-24 h-24 rounded-full bg-amber-50 border-4 border-dashed border-amber-300 flex items-center justify-center mb-6">
               <UserX className="w-12 h-12 text-amber-500" />
             </div>
-            <h2 className="text-lg font-extrabold text-[#4A4435] mb-2">Foto Belum Terdaftar</h2>
+            <h2 className="text-lg font-extrabold text-[#4A4435] mb-2">Wajah Belum Terdaftar</h2>
             <p className="text-sm text-[#8C8573] mb-8 max-w-[260px] leading-relaxed">
-              Daftarkan foto selfie terlebih dahulu sebelum bisa absen.
+              Daftarkan wajah terlebih dahulu agar bisa absen dengan scan wajah otomatis.
             </p>
             <Link
               href="/face-register"
               className="flex items-center justify-center gap-2 w-full h-14 rounded-2xl bg-[#FACC15] text-[#4A4435] font-bold text-base shadow-lg"
             >
               <ScanFace className="w-5 h-5" />
-              Daftarkan Foto Sekarang
+              Daftarkan Wajah Sekarang
             </Link>
           </div>
         )}
@@ -396,10 +461,10 @@ export default function AbsenPage() {
             <div className="w-full space-y-3">
               <button
                 onClick={() => openCamera()}
-                className="w-full flex items-center justify-center gap-2 h-13 px-6 py-3 rounded-2xl bg-orange-500 text-white font-bold shadow-md"
+                className="w-full flex items-center justify-center gap-2 h-14 px-6 py-3 rounded-2xl bg-orange-500 text-white font-bold shadow-md"
               >
-                <Camera className="w-5 h-5" />
-                Ya, Mulai Lembur Tambahan
+                <ScanFace className="w-5 h-5" />
+                Ya, Scan Wajah & Mulai Lembur
               </button>
               <Link
                 href="/dashboard"
@@ -416,16 +481,15 @@ export default function AbsenPage() {
           <div className="flex flex-col items-center justify-center flex-1 text-center">
             {modeCfg && (
               <>
-                {/* Show registered profile photo as reference */}
-                {profilePhotoSrc ? (
+                {facePhotoSrc ? (
                   <div className="relative mb-8">
                     <div className={`w-36 h-36 rounded-full overflow-hidden border-4 shadow-lg ${modeCfg.borderColor}`}>
-                      <img src={profilePhotoSrc} alt="Foto terdaftar" className="w-full h-full object-cover" />
+                      <img src={facePhotoSrc} alt="Wajah terdaftar" className="w-full h-full object-cover" />
                     </div>
                     <div className="absolute -bottom-1 -right-1 w-8 h-8 rounded-full bg-green-500 border-2 border-white flex items-center justify-center">
                       <CheckCircle2 className="w-4 h-4 text-white" />
                     </div>
-                    <p className="text-xs text-[#8C8573] mt-2">Foto terdaftar</p>
+                    <p className="text-xs text-[#8C8573] mt-2">Wajah terdaftar</p>
                   </div>
                 ) : (
                   <div className={`w-36 h-36 rounded-full border-4 border-dashed flex items-center justify-center mb-8 ${modeCfg.iconBg} ${modeCfg.borderColor}`}>
@@ -453,8 +517,8 @@ export default function AbsenPage() {
                   onClick={() => openCamera()}
                   className={`flex items-center justify-center gap-2 font-bold text-base h-14 w-full rounded-2xl shadow-md active:scale-[0.98] transition-transform ${modeCfg.btnBg} ${modeCfg.btnText}`}
                 >
-                  <Camera className="w-5 h-5" />
-                  Buka Kamera & Foto Selfie
+                  <ScanFace className="w-5 h-5" />
+                  Scan Wajah Otomatis
                 </button>
               </>
             )}
@@ -469,68 +533,85 @@ export default function AbsenPage() {
           </div>
         )}
 
-        {/* LIVE CAMERA */}
-        {cameraPhase === "live" && (
+        {/* SCANNING — face scanner animation */}
+        {cameraPhase === "scanning" && (
           <div className="w-full flex flex-col items-center">
-            <div className="relative w-72 h-72 rounded-full overflow-hidden shadow-xl mb-2 bg-black border-4 border-[#FACC15]">
-              <video
-                ref={videoRef}
-                autoPlay playsInline muted
-                className="absolute inset-0 w-full h-full object-cover"
-              />
+            {/* Face scanner viewport */}
+            <div className="relative w-72 h-72 mb-3">
+              <div className="absolute inset-0 rounded-full overflow-hidden shadow-xl bg-black border-4 border-[#FACC15]">
+                <video
+                  ref={videoRef}
+                  autoPlay playsInline muted
+                  className="absolute inset-0 w-full h-full object-cover"
+                />
+                {/* Scan line */}
+                <div
+                  className="absolute left-0 right-0 h-0.5 bg-[#FACC15]/80 shadow-[0_0_8px_2px_rgba(250,204,21,0.6)] pointer-events-none"
+                  style={{ top: `${scanLine}%`, transition: "top 0.05s linear" }}
+                />
+                {faceDetected && (
+                  <div className="absolute inset-0 bg-green-400/20 pointer-events-none flex items-center justify-center">
+                    <CheckCircle2 className="w-16 h-16 text-green-400" />
+                  </div>
+                )}
+              </div>
+              {/* Corner brackets */}
+              {[
+                "top-1 left-1 border-t-4 border-l-4 rounded-tl-xl",
+                "top-1 right-1 border-t-4 border-r-4 rounded-tr-xl",
+                "bottom-1 left-1 border-b-4 border-l-4 rounded-bl-xl",
+                "bottom-1 right-1 border-b-4 border-r-4 rounded-br-xl",
+              ].map((cls, i) => (
+                <div key={i} className={`absolute w-7 h-7 border-[#FACC15] ${cls}`} />
+              ))}
+              {/* Countdown badge (fallback) */}
+              {!("FaceDetector" in window) && countdown > 0 && (
+                <div className="absolute top-2 right-2 w-10 h-10 rounded-full bg-black/60 flex items-center justify-center">
+                  <span className="text-[#FACC15] text-lg font-extrabold">{countdown}</span>
+                </div>
+              )}
             </div>
 
-            {/* Show registered photo for comparison */}
-            {profilePhotoSrc && (
-              <div className="flex items-center gap-3 mb-4 bg-white rounded-2xl px-4 py-2 shadow-sm">
-                <div className="w-10 h-10 rounded-full overflow-hidden border-2 border-[#FACC15]">
-                  <img src={profilePhotoSrc} alt="terdaftar" className="w-full h-full object-cover" />
+            {/* Reference face thumbnail */}
+            {facePhotoSrc && (
+              <div className="flex items-center gap-2 mb-3 bg-white rounded-2xl px-3 py-2 shadow-sm">
+                <div className="w-8 h-8 rounded-full overflow-hidden border-2 border-[#FACC15]">
+                  <img src={facePhotoSrc} alt="ref" className="w-full h-full object-cover" />
                 </div>
-                <p className="text-xs text-[#8C8573]">Pastikan wajah sesuai foto terdaftar</p>
+                <p className="text-xs text-[#8C8573]">Sesuaikan dengan wajah terdaftar</p>
               </div>
             )}
 
+            <div className="flex items-center gap-2 mb-4">
+              <div className="w-2 h-2 rounded-full bg-[#FACC15] animate-ping" />
+              <p className="text-sm font-semibold text-[#4A4435]">
+                {faceDetected ? "Wajah terdeteksi! Menangkap..." : "Mendeteksi wajah..."}
+              </p>
+            </div>
+
             <button
               onClick={capturePhoto}
-              className="w-full h-14 rounded-2xl bg-[#FACC15] text-[#4A4435] font-bold text-base flex items-center justify-center gap-2 shadow-lg active:scale-[0.98] transition-all mb-3"
+              className="w-full h-12 rounded-2xl bg-[#FACC15] text-[#4A4435] font-bold text-sm flex items-center justify-center gap-2 shadow-md mb-3"
             >
-              <Camera className="w-5 h-5" />
-              Ambil Foto
+              <Camera className="w-4 h-4" />
+              Tangkap Manual
             </button>
             <button onClick={cancelCamera} className="text-xs text-[#8C8573] underline">Batalkan</button>
           </div>
         )}
 
-        {/* PREVIEW */}
-        {cameraPhase === "preview" && capturedDataUrl && (
+        {/* CAPTURED — brief preview before auto-submit */}
+        {cameraPhase === "captured" && capturedDataUrl && (
           <div className="w-full flex flex-col items-center">
-            <div className="w-72 h-72 rounded-full overflow-hidden border-4 border-[#FACC15] shadow-xl mb-4">
-              <img src={capturedDataUrl} alt="selfie" className="w-full h-full object-cover" />
-            </div>
-            {profilePhotoSrc && (
-              <div className="flex items-center gap-3 mb-4 bg-white rounded-2xl px-4 py-2 shadow-sm w-full">
-                <div className="w-10 h-10 rounded-full overflow-hidden border-2 border-[#FACC15]">
-                  <img src={profilePhotoSrc} alt="terdaftar" className="w-full h-full object-cover" />
-                </div>
-                <p className="text-xs text-[#8C8573]">Foto terdaftar untuk perbandingan</p>
+            <div className="relative w-64 h-64 rounded-full overflow-hidden border-4 border-green-400 shadow-xl mb-4">
+              <img src={capturedDataUrl} alt="captured" className="w-full h-full object-cover" />
+              <div className="absolute inset-0 bg-green-400/20 flex items-center justify-center">
+                <CheckCircle2 className="w-16 h-16 text-green-400" />
               </div>
-            )}
-            <p className="text-sm font-semibold text-[#4A4435] mb-1">Foto terlihat baik?</p>
-            <p className="text-xs text-[#8C8573] mb-5 text-center">Tekan "Simpan Absensi" untuk melanjutkan</p>
-            <div className="w-full space-y-3">
-              <button
-                onClick={submitPhoto}
-                className={`w-full h-14 rounded-2xl font-bold text-base flex items-center justify-center gap-2 shadow-md ${modeCfg?.btnBg ?? "bg-[#FACC15]"} ${modeCfg?.btnText ?? "text-[#4A4435]"}`}
-              >
-                <CheckCircle2 className="w-5 h-5" />
-                Simpan Absensi
-              </button>
-              <button
-                onClick={retakePhoto}
-                className="w-full h-11 rounded-2xl bg-white border border-gray-200 text-[#8C8573] font-semibold text-sm flex items-center justify-center gap-1.5"
-              >
-                <Camera className="w-4 h-4" /> Ambil Ulang
-              </button>
+            </div>
+            <div className="flex items-center gap-2 mb-4">
+              <Loader2 className="w-4 h-4 text-[#FACC15] animate-spin" />
+              <p className="text-sm font-semibold text-[#4A4435]">Memverifikasi & menyimpan...</p>
             </div>
           </div>
         )}
@@ -538,7 +619,12 @@ export default function AbsenPage() {
         {/* SUBMITTING */}
         {cameraPhase === "submitting" && (
           <div className="flex flex-col items-center justify-center flex-1 text-center">
-            <Loader2 className="w-12 h-12 text-[#FACC15] animate-spin mb-4" />
+            {capturedDataUrl && (
+              <div className="w-40 h-40 rounded-full overflow-hidden border-4 border-[#FACC15] shadow-xl mb-4">
+                <img src={capturedDataUrl} alt="selfie" className="w-full h-full object-cover" />
+              </div>
+            )}
+            <Loader2 className="w-10 h-10 text-[#FACC15] animate-spin mb-3" />
             <p className="text-sm font-semibold text-[#4A4435]">Menyimpan absensi...</p>
           </div>
         )}
@@ -549,26 +635,23 @@ export default function AbsenPage() {
             <div className="w-20 h-20 rounded-full bg-green-100 flex items-center justify-center mb-5">
               <CheckCircle2 className="w-11 h-11 text-green-600" />
             </div>
-            <h2 className="text-xl font-bold text-[#4A4435] mb-2">Absensi Tersimpan!</h2>
-            <p className="text-sm text-[#8C8573] mb-8 max-w-[260px]">
-              {mode === "check-in" ? "Selamat bekerja! Semangat hari ini." :
-               mode === "check-out" ? "Selamat beristirahat! Sampai besok." :
-               "Sesi lembur dimulai. Semangat!"}
-            </p>
-            <Link href="/dashboard" className="bg-[#FACC15] text-[#4A4435] font-bold px-8 py-3 rounded-2xl">
-              Kembali ke Beranda
-            </Link>
+            <h2 className="text-xl font-bold text-[#4A4435] mb-2">Berhasil!</h2>
+            <p className="text-sm text-[#8C8573] mb-6">Absensi Anda telah tercatat.</p>
+            <div className="w-full space-y-3">
+              <Link href="/dashboard" className="flex items-center justify-center w-full h-14 rounded-2xl bg-[#FACC15] text-[#4A4435] font-bold">
+                Kembali ke Beranda
+              </Link>
+              {(getMode(today) === "check-out" || getMode(today) === "overtime-option") && (
+                <button
+                  onClick={() => { setCameraPhase("idle"); setCapturedDataUrl(null); setCapturedBase64(null); }}
+                  className="w-full h-11 rounded-2xl bg-white border border-gray-200 text-[#8C8573] font-semibold text-sm"
+                >
+                  Lanjut Absen Lainnya
+                </button>
+              )}
+            </div>
           </div>
         )}
-
-        {/* SUBMITTING for overtime checkout */}
-        {cameraPhase === "submitting" && mode === "overtime-in-progress" && (
-          <div className="flex flex-col items-center justify-center flex-1 text-center">
-            <Loader2 className="w-12 h-12 text-[#FACC15] animate-spin mb-4" />
-            <p className="text-sm font-semibold text-[#4A4435]">Menyimpan sesi lembur...</p>
-          </div>
-        )}
-
       </div>
     </div>
   );

@@ -6,6 +6,7 @@ import { api, type AttendanceRecord, type LeaveRequest } from "@/lib/api";
 import {
   LogOut, Bell, ChevronRight, X, BellRing, Clock, Timer,
   AlertTriangle, CalendarDays, Music, ScanFace, MapPin,
+  Camera, ImagePlus, User, Trash2, Loader2, CheckCircle2,
 } from "lucide-react";
 import { format, parseISO } from "date-fns";
 import { id as localeId } from "date-fns/locale";
@@ -77,6 +78,23 @@ async function clearMusicFromIDB() {
   db.close();
 }
 // ─────────────────────────────────────────────────────────────────────────
+
+function compressProfilePhoto(dataUrl: string, maxSize = 320): Promise<string> {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      const canvas = document.createElement("canvas");
+      const size = Math.min(maxSize, img.width, img.height);
+      canvas.width = size; canvas.height = size;
+      const ctx = canvas.getContext("2d")!;
+      const srcX = (img.width - size) / 2;
+      const srcY = (img.height - size) / 2;
+      ctx.drawImage(img, srcX, srcY, size, size, 0, 0, size, size);
+      resolve(canvas.toDataURL("image/jpeg", 0.78));
+    };
+    img.src = dataUrl;
+  });
+}
 
 function playAlarmSoundUrl(objectUrl?: string | null) {
   if (objectUrl) {
@@ -379,6 +397,174 @@ function AlarmModal({ onClose }: { onClose: () => void }) {
   );
 }
 
+// ── Profile Photo Modal ────────────────────────────────────────────────────
+function ProfilePhotoModal({ onClose, onUpdated }: { onClose: () => void; onUpdated: () => void }) {
+  const { user } = useAuth();
+  const [phase, setPhase] = useState<"menu" | "camera" | "preview" | "saving">("menu");
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [capturedBase64, setCapturedBase64] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+
+  const stopCamera = useCallback(() => {
+    if (streamRef.current) { streamRef.current.getTracks().forEach((t) => t.stop()); streamRef.current = null; }
+    if (videoRef.current) videoRef.current.srcObject = null;
+  }, []);
+
+  useEffect(() => () => stopCamera(), [stopCamera]);
+
+  const openCamera = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" }, audio: false });
+      streamRef.current = stream;
+      setPhase("camera");
+      setTimeout(() => {
+        if (videoRef.current && streamRef.current) {
+          videoRef.current.srcObject = streamRef.current;
+          videoRef.current.play().catch(() => {});
+        }
+      }, 80);
+    } catch { alert("Kamera tidak dapat diakses"); }
+  };
+
+  const capturePhoto = async () => {
+    const video = videoRef.current; const canvas = canvasRef.current;
+    if (!video || !canvas) return;
+    canvas.width = video.videoWidth || 320; canvas.height = video.videoHeight || 320;
+    const ctx = canvas.getContext("2d")!;
+    ctx.save(); ctx.scale(-1, 1); ctx.drawImage(video, -canvas.width, 0); ctx.restore();
+    const raw = canvas.toDataURL("image/jpeg", 0.9);
+    const compressed = await compressProfilePhoto(raw, 320);
+    setPreviewUrl(compressed);
+    setCapturedBase64(compressed.split(",")[1]!);
+    stopCamera(); setPhase("preview");
+  };
+
+  const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]; if (!file) return;
+    const reader = new FileReader();
+    reader.onload = async (ev) => {
+      const dataUrl = ev.target?.result as string;
+      const compressed = await compressProfilePhoto(dataUrl, 320);
+      setPreviewUrl(compressed); setCapturedBase64(compressed.split(",")[1]!); setPhase("preview");
+    };
+    reader.readAsDataURL(file);
+    e.target.value = "";
+  };
+
+  const savePhoto = async () => {
+    if (!capturedBase64) return;
+    setPhase("saving");
+    try {
+      await api.auth.uploadPhoto(capturedBase64);
+      onUpdated(); onClose();
+    } catch { setPhase("preview"); alert("Gagal menyimpan foto"); }
+  };
+
+  const deletePhoto = async () => {
+    if (!confirm("Hapus foto profil?")) return;
+    setDeleting(true);
+    try { await api.auth.deletePhoto(); onUpdated(); onClose(); }
+    catch { alert("Gagal menghapus foto"); }
+    setDeleting(false);
+  };
+
+  const currentPhoto = user?.profilePhoto ? `data:image/jpeg;base64,${user.profilePhoto}` : null;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/50" onClick={onClose}>
+      <div className="bg-white w-full max-w-[430px] rounded-t-3xl px-5 pt-5 pb-8" onClick={(e) => e.stopPropagation()}>
+        <canvas ref={canvasRef} className="hidden" />
+        <div className="flex items-center justify-between mb-5">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-[#FACC15]/20 flex items-center justify-center">
+              <User className="w-5 h-5 text-[#4A4435]" />
+            </div>
+            <div>
+              <h2 className="text-base font-bold text-[#4A4435]">Foto Profil</h2>
+              <p className="text-xs text-[#8C8573]">Foto tampilan di beranda</p>
+            </div>
+          </div>
+          <button onClick={() => { stopCamera(); onClose(); }} className="w-8 h-8 rounded-full bg-gray-100 flex items-center justify-center">
+            <X className="w-4 h-4 text-[#8C8573]" />
+          </button>
+        </div>
+
+        {phase === "menu" && (
+          <div className="space-y-3">
+            <div className="flex justify-center mb-4">
+              <div className="w-24 h-24 rounded-full overflow-hidden border-4 border-[#FACC15] shadow-lg bg-gray-100 flex items-center justify-center">
+                {currentPhoto ? <img src={currentPhoto} alt="profil" className="w-full h-full object-cover" /> : <User className="w-10 h-10 text-gray-300" />}
+              </div>
+            </div>
+            <button onClick={openCamera} className="w-full h-12 rounded-2xl bg-[#FACC15] text-[#4A4435] font-bold text-sm flex items-center justify-center gap-2">
+              <Camera className="w-4 h-4" /> Ambil Foto Selfie
+            </button>
+            <label className="w-full h-12 rounded-2xl bg-white border-2 border-[#FACC15]/50 text-[#4A4435] font-semibold text-sm flex items-center justify-center gap-2 cursor-pointer">
+              <ImagePlus className="w-4 h-4" /> Upload dari Galeri
+              <input type="file" accept="image/*" className="hidden" onChange={handleUpload} />
+            </label>
+            {currentPhoto && (
+              <button onClick={deletePhoto} disabled={deleting} className="w-full h-10 rounded-2xl bg-white border border-red-200 text-red-500 font-semibold text-sm flex items-center justify-center gap-2 disabled:opacity-50">
+                <Trash2 className="w-3.5 h-3.5" /> {deleting ? "Menghapus..." : "Hapus Foto Profil"}
+              </button>
+            )}
+            <div className="mt-2 pt-2 border-t border-gray-100">
+              <Link href="/face-register" onClick={onClose} className="flex items-center justify-between w-full py-2">
+                <div className="flex items-center gap-2">
+                  <ScanFace className="w-4 h-4 text-[#4A4435]" />
+                  <div>
+                    <p className="text-sm font-semibold text-[#4A4435]">Daftar/Perbarui Wajah Absensi</p>
+                    <p className="text-xs text-[#8C8573]">Foto wajah terpisah dari foto profil</p>
+                  </div>
+                </div>
+                <ChevronRight className="w-4 h-4 text-[#8C8573]" />
+              </Link>
+            </div>
+          </div>
+        )}
+
+        {phase === "camera" && (
+          <div className="flex flex-col items-center">
+            <div className="w-64 h-64 rounded-full overflow-hidden border-4 border-[#FACC15] shadow-xl mb-4 bg-black">
+              <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover scale-x-[-1]" />
+            </div>
+            <button onClick={capturePhoto} className="w-full h-12 rounded-2xl bg-[#FACC15] text-[#4A4435] font-bold flex items-center justify-center gap-2 mb-2">
+              <Camera className="w-4 h-4" /> Ambil Foto
+            </button>
+            <button onClick={() => { stopCamera(); setPhase("menu"); }} className="text-xs text-[#8C8573] underline">Batalkan</button>
+          </div>
+        )}
+
+        {phase === "preview" && previewUrl && (
+          <div className="flex flex-col items-center">
+            <div className="w-40 h-40 rounded-full overflow-hidden border-4 border-[#FACC15] shadow-xl mb-4">
+              <img src={previewUrl} alt="preview" className="w-full h-full object-cover" />
+            </div>
+            <p className="text-sm font-semibold text-[#4A4435] mb-1">Foto terlihat baik?</p>
+            <p className="text-xs text-[#8C8573] mb-4 text-center">Pastikan wajah jelas sebelum menyimpan</p>
+            <button onClick={savePhoto} className="w-full h-12 rounded-2xl bg-[#FACC15] text-[#4A4435] font-bold flex items-center justify-center gap-2 mb-2">
+              <CheckCircle2 className="w-4 h-4" /> Simpan Foto Profil
+            </button>
+            <button onClick={() => { setPreviewUrl(null); setCapturedBase64(null); openCamera(); }} className="w-full h-10 rounded-2xl bg-white border border-gray-200 text-[#8C8573] font-semibold text-sm flex items-center justify-center gap-2">
+              Foto Ulang
+            </button>
+          </div>
+        )}
+
+        {phase === "saving" && (
+          <div className="flex flex-col items-center py-6">
+            <Loader2 className="w-10 h-10 text-[#FACC15] animate-spin mb-3" />
+            <p className="text-sm font-semibold text-[#4A4435]">Menyimpan foto profil...</p>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 const officeIcon = L.divIcon({
   html: `<div style="display:flex;flex-direction:column;align-items:center;gap:2px"><div style="background:#4A4435;width:14px;height:14px;border-radius:50%;border:2px solid #FACC15;box-shadow:0 1px 4px rgba(0,0,0,0.4)"></div><div style="background:rgba(74,68,53,0.9);color:#FACC15;font-size:8px;font-weight:800;padding:1px 5px;border-radius:4px;white-space:nowrap;letter-spacing:0.3px">PT. LWP</div></div>`,
   className: "", iconAnchor: [7, 7],
@@ -468,11 +654,12 @@ function MiniMap({ isAdmin, ownGps }: {
 }
 
 export default function DashboardPage() {
-  const { user, logout } = useAuth();
+  const { user, logout, refreshUser } = useAuth();
   const [, navigate] = useLocation();
   const [now, setNow] = useState(new Date());
   const [metricModal, setMetricModal] = useState<MetricKey | null>(null);
   const [alarmModal, setAlarmModal] = useState(false);
+  const [profileModal, setProfileModal] = useState(false);
   const [ownGps, setOwnGps] = useState<{ lat: number; lng: number } | null>(null);
   const [showMap, setShowMap] = useState(false);
   const alarmFiredRef = useRef<string>("");
@@ -584,10 +771,28 @@ export default function DashboardPage() {
     <div className="flex flex-col min-h-full">
       <div className="bg-[#FACC15] px-5 pt-12 pb-10 rounded-b-[48px] relative z-10 shadow-md">
         <div className="flex items-start justify-between mb-5">
-          <div>
-            <p className="text-[#4A4435]/60 text-xs font-medium uppercase tracking-widest">Selamat Datang</p>
-            <h2 className="text-[#4A4435] text-xl font-extrabold leading-tight mt-0.5">{user?.name ?? "Karyawan"}</h2>
-            <p className="text-[#4A4435]/70 text-xs mt-0.5">{user?.jabatan || user?.position || "Karyawan"}</p>
+          <div className="flex items-center gap-3">
+            {/* Profile photo avatar — tap to change */}
+            <button
+              onClick={() => setProfileModal(true)}
+              className="relative flex-shrink-0 w-14 h-14 rounded-full overflow-hidden border-2 border-[#4A4435]/20 bg-[#4A4435] flex items-center justify-center shadow-md active:scale-95 transition-transform"
+            >
+              {user?.profilePhoto ? (
+                <img src={`data:image/jpeg;base64,${user.profilePhoto}`} alt="profil" className="w-full h-full object-cover" />
+              ) : (
+                <span className="text-[#FACC15] font-extrabold text-lg">
+                  {(user?.name ?? "?").split(" ").map((w: string) => w[0]).join("").slice(0, 2).toUpperCase()}
+                </span>
+              )}
+              <div className="absolute bottom-0 right-0 w-4 h-4 rounded-full bg-[#FACC15] border border-white flex items-center justify-center">
+                <Camera className="w-2.5 h-2.5 text-[#4A4435]" />
+              </div>
+            </button>
+            <div>
+              <p className="text-[#4A4435]/60 text-[10px] font-medium uppercase tracking-widest">Selamat Datang</p>
+              <h2 className="text-[#4A4435] text-lg font-extrabold leading-tight mt-0.5">{user?.name ?? "Karyawan"}</h2>
+              <p className="text-[#4A4435]/70 text-[11px] mt-0.5">{user?.jabatan || user?.position || "Karyawan"}</p>
+            </div>
           </div>
           <div className="flex items-center gap-2">
             <button
@@ -749,6 +954,12 @@ export default function DashboardPage() {
         />
       )}
       {alarmModal && <AlarmModal onClose={() => setAlarmModal(false)} />}
+      {profileModal && (
+        <ProfilePhotoModal
+          onClose={() => setProfileModal(false)}
+          onUpdated={() => { refreshUser?.(); }}
+        />
+      )}
     </div>
   );
 }

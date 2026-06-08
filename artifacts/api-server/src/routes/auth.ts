@@ -5,13 +5,15 @@ import { eq, or } from "drizzle-orm";
 import { db, users } from "@workspace/db";
 import { requireAuth, type AuthRequest } from "./middleware";
 
+const HR_EMAILS = ["admin@test.com", "admin@lwp.com"];
+const HR_NAMES_LOWER = ["admin test", "hrd", "hr manager"];
+
 function getJwtSecret(): string {
   const secret = process.env["JWT_SECRET"];
   if (!secret) {
     if (process.env["NODE_ENV"] === "production") {
       throw new Error("JWT_SECRET environment variable is required in production");
     }
-    console.warn("[WARN] JWT_SECRET not set – using insecure default. Set JWT_SECRET in production!");
     return "absensi-secret-key-change-in-prod";
   }
   return secret;
@@ -33,8 +35,16 @@ export function userToProfile(u: typeof users.$inferSelect) {
     phone: u.phone,
     isActive: u.isActive,
     hasFaceDescriptor: !!u.faceDescriptor,
+    facePhoto: u.facePhoto ?? null,
     profilePhoto: u.profilePhoto ?? null,
   };
+}
+
+function resolveRole(email: string, name: string, requestedRole?: string): string {
+  if (requestedRole === "admin") return "employee";
+  if (HR_EMAILS.includes(email.toLowerCase())) return "hr";
+  if (HR_NAMES_LOWER.some((n) => name.toLowerCase().includes(n))) return "hr";
+  return "employee";
 }
 
 const router = Router();
@@ -54,9 +64,17 @@ router.post("/auth/login", async (req, res) => {
     if (!user.isActive) { res.status(403).json({ error: "Akun Anda tidak aktif. Hubungi admin." }); return; }
     const valid = await bcrypt.compare(password, user.passwordHash);
     if (!valid) { res.status(401).json({ error: "Email/ID atau kata sandi salah" }); return; }
-    const token = signToken(user.id);
+
+    // Auto-upgrade HR emails to hr role if still set as employee
+    let finalUser = user;
+    if (HR_EMAILS.includes(user.email.toLowerCase()) && user.role === "employee") {
+      const [updated] = await db.update(users).set({ role: "hr" }).where(eq(users.id, user.id)).returning();
+      if (updated) finalUser = updated;
+    }
+
+    const token = signToken(finalUser.id);
     res.cookie("token", token, { httpOnly: true, sameSite: "lax", maxAge: 30 * 24 * 60 * 60 * 1000 });
-    res.json({ user: userToProfile(user), token });
+    res.json({ user: userToProfile(finalUser), token });
   } catch (err) {
     req.log.error({ err }, "login error");
     res.status(500).json({ error: "Terjadi kesalahan server" });
@@ -73,9 +91,10 @@ router.post("/auth/register", async (req, res) => {
     const [existing] = await db.select().from(users).where(eq(users.email, email)).limit(1);
     if (existing) { res.status(409).json({ error: "Email sudah terdaftar" }); return; }
     const passwordHash = await bcrypt.hash(password, 10);
+    const role = resolveRole(email, name);
     const [user] = await db
       .insert(users)
-      .values({ name, email, passwordHash, phone: phone || null, role: "employee" })
+      .values({ name, email, passwordHash, phone: phone || null, role })
       .returning();
     const token = signToken(user!.id);
     res.cookie("token", token, { httpOnly: true, sameSite: "lax", maxAge: 30 * 24 * 60 * 60 * 1000 });
@@ -102,17 +121,49 @@ router.post("/auth/logout", (_req, res) => {
   res.json({ ok: true });
 });
 
-// Register selfie as profile photo (replaces face-api based registration)
+// Register face photo for attendance scanning (SEPARATE from profile photo)
+router.post("/auth/register-face-photo", requireAuth, async (req: AuthRequest, res) => {
+  try {
+    const { photoBase64 } = req.body;
+    if (!photoBase64 || typeof photoBase64 !== "string") {
+      res.status(400).json({ error: "Foto wajah tidak valid" }); return;
+    }
+    await db
+      .update(users)
+      .set({ facePhoto: photoBase64, faceDescriptor: "face_registered" })
+      .where(eq(users.id, req.userId!));
+    const [user] = await db.select().from(users).where(eq(users.id, req.userId!)).limit(1);
+    res.json({ ok: true, user: userToProfile(user!) });
+  } catch (err) {
+    req.log.error({ err }, "register-face-photo error");
+    res.status(500).json({ error: "Terjadi kesalahan server" });
+  }
+});
+
+// Delete face photo (unregister face for attendance)
+router.delete("/auth/face-photo", requireAuth, async (req: AuthRequest, res) => {
+  try {
+    await db
+      .update(users)
+      .set({ facePhoto: null, faceDescriptor: null })
+      .where(eq(users.id, req.userId!));
+    res.json({ ok: true });
+  } catch (err) {
+    req.log.error({ err }, "delete-face-photo error");
+    res.status(500).json({ error: "Terjadi kesalahan server" });
+  }
+});
+
+// Legacy: register-selfie now saves as face photo (backward compat)
 router.post("/auth/register-selfie", requireAuth, async (req: AuthRequest, res) => {
   try {
     const { photoBase64 } = req.body;
     if (!photoBase64 || typeof photoBase64 !== "string") {
       res.status(400).json({ error: "Foto selfie tidak valid" }); return;
     }
-    // Store photo as profilePhoto and set faceDescriptor as marker
     await db
       .update(users)
-      .set({ profilePhoto: photoBase64, faceDescriptor: "selfie_registered" })
+      .set({ facePhoto: photoBase64, faceDescriptor: "face_registered" })
       .where(eq(users.id, req.userId!));
     res.json({ ok: true });
   } catch (err) {
@@ -121,7 +172,7 @@ router.post("/auth/register-selfie", requireAuth, async (req: AuthRequest, res) 
   }
 });
 
-// Upload / replace profile photo
+// Upload / replace profile photo (display photo, separate from face photo)
 router.post("/auth/upload-photo", requireAuth, async (req: AuthRequest, res) => {
   try {
     const { photoBase64 } = req.body;
@@ -140,7 +191,7 @@ router.post("/auth/upload-photo", requireAuth, async (req: AuthRequest, res) => 
   }
 });
 
-// Delete profile photo
+// Delete profile photo (display photo)
 router.delete("/auth/photo", requireAuth, async (req: AuthRequest, res) => {
   try {
     await db
@@ -154,34 +205,17 @@ router.delete("/auth/photo", requireAuth, async (req: AuthRequest, res) => {
   }
 });
 
-// Legacy: keep register-face for backward compat (now ignored gracefully)
-router.post("/auth/register-face", requireAuth, async (req: AuthRequest, res) => {
-  try {
-    const { descriptor } = req.body;
-    if (descriptor && Array.isArray(descriptor) && descriptor.length === 128) {
-      await db
-        .update(users)
-        .set({ faceDescriptor: JSON.stringify(descriptor) })
-        .where(eq(users.id, req.userId!));
-    }
-    res.json({ ok: true });
-  } catch (err) {
-    req.log.error({ err }, "register-face error");
-    res.status(500).json({ error: "Terjadi kesalahan server" });
-  }
-});
-
 router.get("/auth/face-descriptor", requireAuth, async (req: AuthRequest, res) => {
   try {
     const [user] = await db
-      .select({ faceDescriptor: users.faceDescriptor, profilePhoto: users.profilePhoto })
+      .select({ faceDescriptor: users.faceDescriptor, facePhoto: users.facePhoto, profilePhoto: users.profilePhoto })
       .from(users)
       .where(eq(users.id, req.userId!))
       .limit(1);
     if (!user) { res.status(401).json({ error: "Unauthorized" }); return; }
     const fd = user.faceDescriptor;
-    const descriptor = fd && fd !== "selfie_registered" ? JSON.parse(fd) as number[] : null;
-    res.json({ descriptor, profilePhoto: user.profilePhoto ?? null });
+    const descriptor = fd && fd !== "selfie_registered" && fd !== "face_registered" ? JSON.parse(fd) as number[] : null;
+    res.json({ descriptor, facePhoto: user.facePhoto ?? null, profilePhoto: user.profilePhoto ?? null });
   } catch (err) {
     req.log.error({ err }, "face-descriptor error");
     res.status(500).json({ error: "Terjadi kesalahan server" });

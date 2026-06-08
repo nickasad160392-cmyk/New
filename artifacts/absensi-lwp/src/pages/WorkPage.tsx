@@ -5,17 +5,20 @@ import { api, type DailyTask, type Goal } from "@/lib/api";
 import { toast } from "sonner";
 import {
   Briefcase, Target, CalendarDays, Plus, Check, Trash2,
-  ChevronLeft, ChevronRight, Loader2, TrendingUp, X,
+  ChevronLeft, ChevronRight, Loader2, TrendingUp, X, AlertTriangle, Clock,
 } from "lucide-react";
 
 function getJakartaDate(): string {
   return new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Jakarta" });
 }
-
+function getYesterdayDate(): string {
+  const d = new Date();
+  d.setDate(d.getDate() - 1);
+  return d.toLocaleDateString("en-CA", { timeZone: "Asia/Jakarta" });
+}
 function getMonthPeriod(d = new Date()): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
 }
-
 function getWeekPeriod(d = new Date()): string {
   const date = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
   const day = date.getUTCDay() || 7;
@@ -24,15 +27,38 @@ function getWeekPeriod(d = new Date()): string {
   const week = Math.ceil((((date.getTime() - yearStart.getTime()) / 86400000) + 1) / 7);
   return `${date.getUTCFullYear()}-W${String(week).padStart(2, "0")}`;
 }
-
 function formatDateId(iso: string): string {
   const [y, m, dayStr] = iso.split("-");
   const months = ["Jan","Feb","Mar","Apr","Mei","Jun","Jul","Agt","Sep","Okt","Nov","Des"];
   return `${dayStr} ${months[(parseInt(m) - 1) % 12]} ${y}`;
 }
-
 function initials(name: string): string {
   return name.split(" ").map((w) => w[0]).join("").slice(0, 2).toUpperCase();
+}
+
+// ─── Urgent/Overdue Task Item ────────────────────────────────────────────────
+function UrgentTaskItem({ task, onComplete }: { task: DailyTask; onComplete: () => void }) {
+  return (
+    <div className="flex items-center gap-3 rounded-2xl px-3.5 py-3 bg-red-50 border border-red-200 shadow-sm">
+      <div className="flex-shrink-0 w-6 h-6 rounded-full border-2 border-red-400 flex items-center justify-center">
+        <AlertTriangle className="w-3 h-3 text-red-500" />
+      </div>
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-1.5 mb-0.5">
+          <span className="text-[9px] font-bold text-red-600 bg-red-100 px-1.5 py-0.5 rounded-full uppercase tracking-wider">MENDESAK</span>
+          <span className="text-[9px] text-red-400">dari kemarin</span>
+        </div>
+        <p className="text-sm font-semibold text-red-800">{task.title}</p>
+        {task.target && <p className="text-xs text-red-500">🎯 {task.target}</p>}
+      </div>
+      <button
+        onClick={onComplete}
+        className="flex-shrink-0 flex items-center gap-1 px-2 py-1 rounded-xl bg-green-100 text-green-700 text-[10px] font-bold"
+      >
+        <Check className="w-3 h-3" /> Selesai
+      </button>
+    </div>
+  );
 }
 
 // ─── Task List View ───────────────────────────────────────────────────────────
@@ -62,11 +88,12 @@ function TaskItem({ task, onToggle, onDelete }: { task: DailyTask; onToggle: () 
 function GoalItem({ goal, onProgress, onDelete }: { goal: Goal; onProgress: (v: number) => void; onDelete: () => void }) {
   const pct = goal.targetValue > 0 ? Math.round((goal.progressValue / goal.targetValue) * 100) : 0;
   const done = goal.status === "completed" || pct >= 100;
+  const overdue = !done && goal.periodType === "daily";
   const [editing, setEditing] = useState(false);
   const [val, setVal] = useState(String(goal.progressValue));
 
   return (
-    <div className={`bg-white rounded-2xl px-4 py-3.5 shadow-sm ${done ? "border-l-4 border-green-400" : "border-l-4 border-[#FACC15]"}`}>
+    <div className={`bg-white rounded-2xl px-4 py-3.5 shadow-sm ${done ? "border-l-4 border-green-400" : overdue ? "border-l-4 border-red-400" : "border-l-4 border-[#FACC15]"}`}>
       <div className="flex items-start justify-between mb-2">
         <div className="flex-1 min-w-0">
           <p className="text-sm font-bold text-[#4A4435]">{goal.title}</p>
@@ -88,9 +115,7 @@ function GoalItem({ goal, onProgress, onDelete }: { goal: Goal; onProgress: (v: 
       {editing ? (
         <form onSubmit={(e) => { e.preventDefault(); onProgress(parseInt(val) || 0); setEditing(false); }} className="flex items-center gap-2">
           <input
-            type="number"
-            value={val}
-            onChange={(e) => setVal(e.target.value)}
+            type="number" value={val} onChange={(e) => setVal(e.target.value)}
             min={0} max={goal.targetValue}
             className="flex-1 h-8 px-3 rounded-xl border border-gray-200 text-xs text-[#4A4435] focus:outline-none focus:ring-1 focus:ring-[#FACC15]"
             autoFocus
@@ -103,13 +128,29 @@ function GoalItem({ goal, onProgress, onDelete }: { goal: Goal; onProgress: (v: 
         <div className="flex items-center justify-between">
           <span className="text-xs text-[#8C8573]">{goal.progressValue} / {goal.targetValue}</span>
           {!done && (
-            <button onClick={() => setEditing(true)} className="text-xs text-[#4A4435] font-semibold underline">
-              Update progres
-            </button>
+            <button onClick={() => setEditing(true)} className="text-xs text-[#4A4435] font-semibold underline">Update progres</button>
           )}
           {done && <span className="text-xs font-bold text-green-600">✅ Tercapai!</span>}
         </div>
       )}
+    </div>
+  );
+}
+
+// ─── History Task Item ────────────────────────────────────────────────────────
+function HistoryTaskItem({ task }: { task: DailyTask }) {
+  return (
+    <div className={`flex items-center gap-3 rounded-2xl px-3.5 py-3 ${task.isCompleted ? "bg-green-50" : "bg-orange-50 border border-orange-200"} shadow-sm`}>
+      <div className={`flex-shrink-0 w-5 h-5 rounded-full border-2 flex items-center justify-center ${task.isCompleted ? "bg-green-500 border-green-500" : "border-orange-400"}`}>
+        {task.isCompleted ? <Check className="w-3 h-3 text-white" /> : <Clock className="w-2.5 h-2.5 text-orange-500" />}
+      </div>
+      <div className="flex-1 min-w-0">
+        <p className={`text-sm font-semibold text-[#4A4435] ${task.isCompleted ? "line-through opacity-50" : ""}`}>{task.title}</p>
+        {task.target && <p className="text-xs text-[#8C8573]">🎯 {task.target}</p>}
+      </div>
+      <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${task.isCompleted ? "bg-green-100 text-green-700" : "bg-orange-100 text-orange-700"}`}>
+        {task.isCompleted ? "Selesai" : "Belum"}
+      </span>
     </div>
   );
 }
@@ -132,7 +173,7 @@ function AddTaskForm({ date, onAdded }: { date: string; onAdded: () => void }) {
   });
   if (!open) return (
     <button onClick={() => setOpen(true)} className="w-full h-12 rounded-2xl border-2 border-dashed border-gray-200 text-[#8C8573] text-sm font-semibold flex items-center justify-center gap-2 active:bg-gray-50">
-      <Plus className="w-4 h-4" /> Tambah Tugas
+      <Plus className="w-4 h-4" /> Tambah Tugas Harian
     </button>
   );
   return (
@@ -217,6 +258,7 @@ export default function WorkPage() {
   const [selectedDate, setSelectedDate] = useState(getJakartaDate());
   const [historyDate, setHistoryDate] = useState(getJakartaDate());
   const today = getJakartaDate();
+  const yesterday = getYesterdayDate();
   const monthPeriod = getMonthPeriod();
   const weekPeriod = getWeekPeriod();
   const qc = useQueryClient();
@@ -225,6 +267,13 @@ export default function WorkPage() {
   const tasksQuery = useQuery({
     queryKey: ["tasks", selectedDate],
     queryFn: () => api.tasks.list(selectedDate),
+  });
+
+  // Yesterday's tasks (for urgency/carry-over) — only when viewing today
+  const yesterdayTasksQuery = useQuery({
+    queryKey: ["tasks", yesterday],
+    queryFn: () => api.tasks.list(yesterday),
+    enabled: selectedDate === today && tab === "agenda",
   });
 
   // History tasks
@@ -244,9 +293,23 @@ export default function WorkPage() {
   const weekGoals = (goalsQuery.data ?? []).filter((g) => g.periodType === "weekly" && g.period === weekPeriod);
   const monthGoals = (goalsQuery.data ?? []).filter((g) => g.periodType === "monthly" && g.period === monthPeriod);
 
+  const overdueYesterday = (yesterdayTasksQuery.data ?? []).filter((t) => !t.isCompleted);
+
   const toggleTask = useMutation({
     mutationFn: (task: DailyTask) => api.tasks.update(task.id, { isCompleted: !task.isCompleted }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["tasks", selectedDate] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["tasks", selectedDate] });
+      qc.invalidateQueries({ queryKey: ["tasks", yesterday] });
+    },
+    onError: () => toast.error("Gagal memperbarui tugas"),
+  });
+
+  const completeYesterdayTask = useMutation({
+    mutationFn: (task: DailyTask) => api.tasks.update(task.id, { isCompleted: true }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["tasks", yesterday] });
+      toast.success("Tugas selesai! ✅");
+    },
     onError: () => toast.error("Gagal memperbarui tugas"),
   });
 
@@ -278,6 +341,13 @@ export default function WorkPage() {
     setSelectedDate(d.toLocaleDateString("en-CA"));
   };
 
+  // History range stats
+  const historyStats = historyDate && historyQuery.data ? {
+    total: historyQuery.data.length,
+    done: historyQuery.data.filter((t) => t.isCompleted).length,
+    pending: historyQuery.data.filter((t) => !t.isCompleted).length,
+  } : null;
+
   return (
     <div className="flex flex-col min-h-full">
       {/* Header */}
@@ -286,11 +356,17 @@ export default function WorkPage() {
           <div className="w-12 h-12 rounded-full bg-[#4A4435] flex items-center justify-center flex-shrink-0">
             <span className="text-[#FACC15] font-extrabold text-sm">{initials(user?.name ?? "?")}</span>
           </div>
-          <div>
+          <div className="flex-1">
             <p className="text-[#4A4435]/60 text-xs font-medium">Kerja & Target</p>
             <h1 className="text-xl font-extrabold text-[#4A4435]">{user?.name}</h1>
             <p className="text-xs text-[#4A4435]/70">{user?.jabatan || "Karyawan"}</p>
           </div>
+          {overdueYesterday.length > 0 && tab === "agenda" && selectedDate === today && (
+            <div className="flex items-center gap-1 bg-red-500 text-white px-2 py-1 rounded-xl">
+              <AlertTriangle className="w-3.5 h-3.5" />
+              <span className="text-xs font-bold">{overdueYesterday.length}</span>
+            </div>
+          )}
         </div>
 
         {/* Tabs */}
@@ -340,11 +416,33 @@ export default function WorkPage() {
               </button>
             </div>
 
+            {/* URGENT section: overdue tasks from yesterday (only on today's view) */}
+            {selectedDate === today && overdueYesterday.length > 0 && (
+              <div className="space-y-2">
+                <div className="flex items-center gap-2">
+                  <div className="w-6 h-6 rounded-lg bg-red-100 flex items-center justify-center">
+                    <AlertTriangle className="w-3.5 h-3.5 text-red-600" />
+                  </div>
+                  <p className="text-xs font-bold text-red-700 uppercase tracking-wider">
+                    Tugas Belum Selesai Kemarin ({overdueYesterday.length})
+                  </p>
+                </div>
+                {overdueYesterday.map((task) => (
+                  <UrgentTaskItem
+                    key={`urgent-${task.id}`}
+                    task={task}
+                    onComplete={() => completeYesterdayTask.mutate(task)}
+                  />
+                ))}
+                <div className="h-px bg-red-100" />
+              </div>
+            )}
+
             {/* Progress bar */}
             {tasks.length > 0 && (
               <div className="bg-white rounded-2xl px-4 py-3 shadow-sm">
                 <div className="flex justify-between text-xs mb-1.5">
-                  <span className="font-semibold text-[#4A4435]">Progres Hari Ini</span>
+                  <span className="font-semibold text-[#4A4435]">Progres {selectedDate === today ? "Hari Ini" : formatDateId(selectedDate)}</span>
                   <span className="font-bold text-[#4A4435]">{completed}/{tasks.length} ({pct}%)</span>
                 </div>
                 <div className="h-2.5 bg-gray-100 rounded-full overflow-hidden">
@@ -359,7 +457,9 @@ export default function WorkPage() {
             ) : (
               <div className="space-y-2">
                 {tasks.length === 0 && (
-                  <p className="text-sm text-[#8C8573] text-center py-4">Belum ada tugas untuk tanggal ini</p>
+                  <p className="text-sm text-[#8C8573] text-center py-4">
+                    {selectedDate === today ? "Belum ada agenda hari ini. Tambah tugas di bawah." : "Tidak ada agenda untuk tanggal ini."}
+                  </p>
                 )}
                 {tasks.map((task) => (
                   <TaskItem
@@ -382,7 +482,6 @@ export default function WorkPage() {
         {/* ── GOALS TAB ──────────────────────────────── */}
         {tab === "goals" && (
           <div className="space-y-5">
-            {/* Weekly goals */}
             <div>
               <div className="flex items-center gap-2 mb-3">
                 <div className="w-7 h-7 rounded-lg bg-[#FACC15]/20 flex items-center justify-center">
@@ -395,16 +494,11 @@ export default function WorkPage() {
                 <div className="flex justify-center py-4"><Loader2 className="w-5 h-5 text-[#FACC15] animate-spin" /></div>
               ) : (
                 <div className="space-y-2.5">
-                  {weekGoals.length === 0 && (
-                    <p className="text-xs text-[#8C8573] text-center py-2">Belum ada goals minggu ini</p>
-                  )}
+                  {weekGoals.length === 0 && <p className="text-xs text-[#8C8573] text-center py-2">Belum ada goals minggu ini</p>}
                   {weekGoals.map((g) => (
-                    <GoalItem
-                      key={g.id}
-                      goal={g}
+                    <GoalItem key={g.id} goal={g}
                       onProgress={(v) => updateGoal.mutate({ id: g.id, progress: v })}
-                      onDelete={() => deleteGoal.mutate(g.id)}
-                    />
+                      onDelete={() => deleteGoal.mutate(g.id)} />
                   ))}
                   <AddGoalForm period={weekPeriod} periodType="weekly" onAdded={() => {}} />
                 </div>
@@ -413,7 +507,6 @@ export default function WorkPage() {
 
             <div className="h-px bg-gray-100" />
 
-            {/* Monthly goals */}
             <div>
               <div className="flex items-center gap-2 mb-3">
                 <div className="w-7 h-7 rounded-lg bg-blue-100 flex items-center justify-center">
@@ -426,16 +519,11 @@ export default function WorkPage() {
                 <div className="flex justify-center py-4"><Loader2 className="w-5 h-5 text-[#FACC15] animate-spin" /></div>
               ) : (
                 <div className="space-y-2.5">
-                  {monthGoals.length === 0 && (
-                    <p className="text-xs text-[#8C8573] text-center py-2">Belum ada goals bulan ini</p>
-                  )}
+                  {monthGoals.length === 0 && <p className="text-xs text-[#8C8573] text-center py-2">Belum ada goals bulan ini</p>}
                   {monthGoals.map((g) => (
-                    <GoalItem
-                      key={g.id}
-                      goal={g}
+                    <GoalItem key={g.id} goal={g}
                       onProgress={(v) => updateGoal.mutate({ id: g.id, progress: v })}
-                      onDelete={() => deleteGoal.mutate(g.id)}
-                    />
+                      onDelete={() => deleteGoal.mutate(g.id)} />
                   ))}
                   <AddGoalForm period={monthPeriod} periodType="monthly" onAdded={() => {}} />
                 </div>
@@ -450,14 +538,24 @@ export default function WorkPage() {
             <div className="bg-white rounded-2xl px-4 py-3 shadow-sm">
               <p className="text-xs font-bold text-[#8C8573] mb-2">Pilih Tanggal</p>
               <input
-                type="date"
-                value={historyDate}
-                max={today}
+                type="date" value={historyDate} max={today}
                 onChange={(e) => setHistoryDate(e.target.value)}
                 className="w-full h-11 px-3 rounded-xl border border-gray-200 text-sm text-[#4A4435] focus:outline-none focus:ring-2 focus:ring-[#FACC15]"
               />
             </div>
-            <p className="text-sm font-bold text-[#4A4435]">{formatDateId(historyDate)}</p>
+
+            <div className="flex items-center justify-between">
+              <p className="text-sm font-bold text-[#4A4435]">{formatDateId(historyDate)}</p>
+              {historyStats && historyStats.total > 0 && (
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] font-bold bg-green-100 text-green-700 px-2 py-0.5 rounded-full">✅ {historyStats.done}</span>
+                  {historyStats.pending > 0 && (
+                    <span className="text-[10px] font-bold bg-orange-100 text-orange-700 px-2 py-0.5 rounded-full">⏳ {historyStats.pending}</span>
+                  )}
+                </div>
+              )}
+            </div>
+
             {historyQuery.isLoading ? (
               <div className="flex justify-center py-6"><Loader2 className="w-6 h-6 text-[#FACC15] animate-spin" /></div>
             ) : (historyQuery.data ?? []).length === 0 ? (
@@ -468,19 +566,15 @@ export default function WorkPage() {
             ) : (
               <div className="space-y-2">
                 {(historyQuery.data ?? []).map((task) => (
-                  <div key={task.id} className={`flex items-center gap-3 rounded-2xl px-3.5 py-3 ${task.isCompleted ? "bg-green-50" : "bg-white"} shadow-sm`}>
-                    <div className={`flex-shrink-0 w-5 h-5 rounded-full border-2 flex items-center justify-center ${task.isCompleted ? "bg-green-500 border-green-500" : "border-gray-200"}`}>
-                      {task.isCompleted && <Check className="w-3 h-3 text-white" />}
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <p className={`text-sm font-semibold text-[#4A4435] ${task.isCompleted ? "line-through opacity-50" : ""}`}>{task.title}</p>
-                      {task.target && <p className="text-xs text-[#8C8573]">🎯 {task.target}</p>}
-                    </div>
-                  </div>
+                  <HistoryTaskItem key={task.id} task={task} />
                 ))}
-                <p className="text-xs text-center text-[#8C8573] pt-1">
-                  {(historyQuery.data ?? []).filter((t) => t.isCompleted).length}/{(historyQuery.data ?? []).length} selesai
-                </p>
+                {historyStats && historyStats.pending > 0 && (
+                  <div className="bg-orange-50 border border-orange-200 rounded-2xl px-4 py-3 mt-2">
+                    <p className="text-xs font-semibold text-orange-700">
+                      ⚠️ {historyStats.pending} tugas belum selesai pada tanggal ini. Pastikan diselesaikan di hari berikutnya.
+                    </p>
+                  </div>
+                )}
               </div>
             )}
           </div>
