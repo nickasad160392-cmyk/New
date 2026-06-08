@@ -1,0 +1,4 @@
+- [AbsensiLWP stack](absensi-lwp-stack.md) — React+Vite frontend (/), Express 5 API server (port 8080), PostgreSQL+Drizzle ORM, Tailwind v4, wouter, TanStack Query
+- [AbsensiLWP schema](absensi-lwp-schema.md) — attendance_records has checkOutSelfie, overtimeCheckInTime, overtimeCheckOutTime, overtimeCheckInSelfie, overtimeExtraMinutes columns (pushed June 2026)
+- [AbsensiLWP cycle logic](absensi-lwp-cycle.md) — cycle runs 7th to 6th of next month; presentDays includes hadir+terlambat+lembur; lateDays is just terlambat
+- [AbsensiLWP db rebuild rule](absensi-lwp-db-rebuild.md) — must run `pnpm --filter @workspace/db exec tsc --build` after any schema change to regenerate lib/db/dist/ type declarations for tsc to pick them up
